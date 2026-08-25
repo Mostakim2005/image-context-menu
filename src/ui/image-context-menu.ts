@@ -1,4 +1,4 @@
-import { Menu, Notice, type MenuItem } from 'obsidian';
+import { Modal, Notice, type App } from 'obsidian';
 import type { ImageTarget } from '../types';
 
 export interface ImageContextMenuActions {
@@ -9,49 +9,70 @@ export interface ImageContextMenuActions {
   compress(): void;
   resize(): void;
   copyEmbed(): void;
-  copyExternalLink(): void;
   openImage(): void;
 }
 
 export function showImageContextMenu(
-  event: MouseEvent,
+  app: App,
   target: ImageTarget,
   actions: ImageContextMenuActions,
 ): void {
-  const menu = new Menu();
-
-  menu.addItem((item) => addAction(item, 'Copy as JPEG', 'image-file', () => actions.copyAsJpeg()));
-  menu.addItem((item) => addAction(item, 'Copy embed link', 'file-text', () => actions.copyEmbed()));
-
-  if (target.isVaultImage && target.file) {
-    menu.addItem((item) => addAction(item, 'Share image', 'share-2', () => actions.share()));
-    menu.addSeparator();
-    menu.addItem((item) => addAction(item, 'Resize image', 'maximize-2', () => actions.resize()));
-    menu.addItem((item) => addAction(item, 'Compress image', 'file-down', () => actions.compress()));
-    menu.addItem((item) => addAction(item, 'Rename image', 'pencil', () => actions.rename()));
-  } else if (/^https?:\/\//i.test(target.source)) {
-    menu.addItem((item) => addAction(item, 'Copy external link', 'external-link', () => actions.copyExternalLink()));
-  }
-
-  menu.addSeparator();
-  menu.addItem((item) => addAction(item, 'Image information', 'info', () => actions.showInfo()));
-  menu.addItem((item) => addAction(item, 'Open image', 'maximize', () => actions.openImage()));
-
-  menu.showAtPosition({ x: event.pageX, y: event.pageY });
+  new ImageActionModal(app, target, actions).open();
 }
 
-function addAction(
-  item: MenuItem,
-  title: string,
-  icon: string,
-  callback: () => void,
-): MenuItem {
-  return item.setTitle(title).setIcon(icon).onClick(() => {
-    try {
-      callback();
-    } catch (error) {
-      console.error(`Image context action failed: ${title}`, error);
-      new Notice(`${title} failed.`);
+class ImageActionModal extends Modal {
+  constructor(
+    app: App,
+    private readonly target: ImageTarget,
+    private readonly actions: ImageContextMenuActions,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.addClass('image-context-action-modal');
+
+    const title = this.contentEl.createDiv({ cls: 'image-context-action-title' });
+    title.createDiv({ cls: 'image-context-action-kicker', text: 'IMAGE' });
+    title.createDiv({ cls: 'image-context-action-name', text: this.target.fileName ?? 'Image' });
+
+    const actions = this.contentEl.createDiv({ cls: 'image-context-action-grid' });
+
+    if (this.target.isVaultImage) {
+      this.addAction(actions, 'Copy embed', 'Copy the exact Obsidian embed syntax.', this.actions.copyEmbed);
     }
-  });
+    this.addAction(actions, 'Copy as JPEG', 'Copy a JPEG version to the clipboard.', this.actions.copyAsJpeg);
+    this.addAction(actions, 'Image information', 'View dimensions, type, and size.', this.actions.showInfo);
+    this.addAction(actions, 'Open image', 'Open the image normally.', this.actions.openImage);
+
+    if (this.target.isVaultImage && this.target.file) {
+      this.addAction(actions, 'Share image', 'Share the original vault file.', this.actions.share);
+      this.addAction(actions, 'Resize image', 'Add an Obsidian embed size.', this.actions.resize);
+      this.addAction(actions, 'Compress image', 'Preview and safely reduce file size.', this.actions.compress);
+      this.addAction(actions, 'Rename image', 'Rename while letting Obsidian update links.', this.actions.rename);
+    }
+
+    const cancel = this.contentEl.createEl('button', { cls: 'image-context-action-cancel', text: 'Cancel' });
+    cancel.addEventListener('click', () => this.close());
+  }
+
+  private addAction(parent: HTMLElement, title: string, description: string, callback: () => void): void {
+    const button = parent.createEl('button', { cls: 'image-context-action' });
+    button.createDiv({ cls: 'image-context-action-label', text: title });
+    button.createDiv({ cls: 'image-context-action-description', text: description });
+    button.addEventListener('click', () => {
+      this.close();
+      try {
+        callback();
+      } catch (error) {
+        console.error(`Image context action failed: ${title}`, error);
+        new Notice(`${title} failed.`);
+      }
+    });
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
 }
