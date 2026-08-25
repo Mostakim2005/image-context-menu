@@ -97,7 +97,20 @@ export class CompressionService {
       const arrayBuffer = await this.app.vault.readBinary(file);
       const blob = new Blob([arrayBuffer], { type: getMimeType(extension) });
       const image = await this.loadImage(blob);
-      const output = await this.imageToBlob(image, extension, settings.jpegQuality / 100);
+      const format: SupportedImageFormat | undefined =
+        extension === 'jpg' || extension === 'jpeg' || extension === 'png' || extension === 'webp'
+          ? extension
+          : undefined;
+      if (!format) {
+        return {
+          status: 'unsupported',
+          originalBytes,
+          outputBytes: originalBytes,
+          savedBytes: 0,
+          reason: 'Unsupported image format.',
+        };
+      }
+      const output = await this.imageToBlob(image, format, settings.jpegQuality / 100);
 
       if (!output) {
         return { status: 'error', originalBytes, outputBytes: originalBytes, savedBytes: 0, reason: 'The browser could not encode the image.' };
