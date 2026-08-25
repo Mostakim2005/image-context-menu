@@ -1,5 +1,10 @@
 import { TFile, type App } from 'obsidian';
-import type { CompressionResult, ImageContextSettings, SupportedImageFormat } from '../types';
+import type {
+  CompressionPreview,
+  CompressionResult,
+  ImageContextSettings,
+  SupportedImageFormat,
+} from '../types';
 import { getExtension, isSupportedCompressionFormat } from '../utils/image-utils';
 import { getMimeType } from '../utils/mime-utils';
 
@@ -9,30 +14,83 @@ export class CompressionService {
     private readonly getSettings: () => ImageContextSettings,
   ) {}
 
-  async compressFile(file: TFile): Promise<CompressionResult> {
-    const originalBytes = file.stat.size;
+  async previewFile(file: TFile): Promise<CompressionPreview> {
     const settings = this.getSettings();
-    const thresholdBytes = settings.sizeThresholdKB * 1024;
+    const originalBytes = file.stat.size;
     const extension = getExtension(file.name);
+    const widthHeight = await this.readDimensions(file).catch(() => ({ width: null, height: null }));
 
-    if (originalBytes <= thresholdBytes) {
+    if (!isSupportedCompressionFormat(extension)) {
       return {
-        status: 'skipped',
+        decision: 'unsupported',
         originalBytes,
-        outputBytes: originalBytes,
-        savedBytes: 0,
+        estimatedBytes: null,
+        estimatedSavingsPercent: 0,
+        ...widthHeight,
+        quality: settings.jpegQuality,
+        reason: 'This format is not safely recompressed by the browser encoder.',
+      };
+    }
+
+    if (originalBytes <= settings.sizeThresholdKB * 1024) {
+      return {
+        decision: 'skipped',
+        originalBytes,
+        estimatedBytes: originalBytes,
+        estimatedSavingsPercent: 0,
+        ...widthHeight,
+        quality: settings.jpegQuality,
         reason: 'Below the configured size threshold.',
       };
     }
 
-    if (!isSupportedCompressionFormat(extension)) {
+    const pixels = (widthHeight.width ?? 0) * (widthHeight.height ?? 0);
+    const bytesPerPixel = pixels > 0 ? originalBytes / pixels : Infinity;
+    const efficient = bytesPerPixel > 0 && bytesPerPixel < (extension === 'png' ? 1.2 : 0.18);
+
+    if (settings.skipAlreadyCompressed && efficient) {
       return {
-        status: 'unsupported',
+        decision: 'already-efficient',
         originalBytes,
-        outputBytes: originalBytes,
-        savedBytes: 0,
-        reason: 'This image format is not safely recompressed without changing its format or data characteristics.',
+        estimatedBytes: originalBytes,
+        estimatedSavingsPercent: 0,
+        ...widthHeight,
+        quality: settings.jpegQuality,
+        reason: 'The image already has a practical size-to-resolution ratio.',
       };
+    }
+
+    // This is intentionally a range estimate, not a fake exact prediction.
+    const qualityFactor = extension === 'png'
+      ? 0.72
+      : Math.max(0.2, Math.min(0.9, 0.35 + settings.jpegQuality / 100 * 0.55));
+    const estimatedBytes = Math.max(1, Math.round(originalBytes * qualityFactor));
+    const savings = Math.max(0, Math.round((1 - estimatedBytes / originalBytes) * 100));
+
+    return {
+      decision: savings >= settings.minimumSavingsPercent ? 'compress' : 'skipped',
+      originalBytes,
+      estimatedBytes,
+      estimatedSavingsPercent: savings,
+      ...widthHeight,
+      quality: settings.jpegQuality,
+      reason: savings >= settings.minimumSavingsPercent
+        ? 'Estimated to provide meaningful savings.'
+        : 'Estimated savings are below the configured minimum.',
+    };
+  }
+
+  async compressFile(file: TFile): Promise<CompressionResult> {
+    const originalBytes = file.stat.size;
+    const settings = this.getSettings();
+    const extension = getExtension(file.name);
+
+    const preview = await this.previewFile(file);
+    if (preview.decision === 'unsupported') {
+      return { status: 'unsupported', originalBytes, outputBytes: originalBytes, savedBytes: 0, reason: preview.reason };
+    }
+    if (preview.decision !== 'compress') {
+      return { status: 'skipped', originalBytes, outputBytes: originalBytes, savedBytes: 0, reason: preview.reason };
     }
 
     try {
@@ -42,22 +100,30 @@ export class CompressionService {
       const output = await this.imageToBlob(image, extension, settings.jpegQuality / 100);
 
       if (!output) {
-        return {
-          status: 'error',
-          originalBytes,
-          outputBytes: originalBytes,
-          savedBytes: 0,
-          reason: 'The browser could not encode the image.',
-        };
+        return { status: 'error', originalBytes, outputBytes: originalBytes, savedBytes: 0, reason: 'The browser could not encode the image.' };
       }
 
-      if (output.size >= originalBytes) {
+      const savingsPercent = ((originalBytes - output.size) / originalBytes) * 100;
+      if (output.size >= originalBytes || savingsPercent < settings.minimumSavingsPercent) {
         return {
           status: 'skipped',
           originalBytes,
           outputBytes: originalBytes,
           savedBytes: 0,
-          reason: 'Compression did not make the file smaller.',
+          reason: 'The final output was not meaningfully smaller than the original.',
+        };
+      }
+
+      // Re-read the file stat before committing so a rename/replace that happened
+      // while compression was running cannot silently overwrite a newer version.
+      const current = this.app.vault.getAbstractFileByPath(file.path);
+      if (!(current instanceof TFile) || current.stat.mtime !== file.stat.mtime || current.stat.size !== originalBytes) {
+        return {
+          status: 'error',
+          originalBytes,
+          outputBytes: originalBytes,
+          savedBytes: 0,
+          reason: 'The source image changed while compression was running.',
         };
       }
 
@@ -80,6 +146,13 @@ export class CompressionService {
     }
   }
 
+  private readDimensions(file: TFile): Promise<{ width: number; height: number }> {
+    return this.app.vault.readBinary(file).then((arrayBuffer) => {
+      const blob = new Blob([arrayBuffer], { type: getMimeType(getExtension(file.name)) });
+      return this.loadImage(blob).then((image) => ({ width: image.naturalWidth, height: image.naturalHeight }));
+    });
+  }
+
   private loadImage(blob: Blob): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
       const url = URL.createObjectURL(blob);
@@ -96,13 +169,9 @@ export class CompressionService {
     });
   }
 
-  private imageToBlob(
-    image: HTMLImageElement,
-    format: SupportedImageFormat,
-    quality: number,
-  ): Promise<Blob | null> {
+  private imageToBlob(image: HTMLImageElement, format: SupportedImageFormat, quality: number): Promise<Blob | null> {
     return new Promise((resolve, reject) => {
-      const canvas = document.body.createEl('canvas');
+      const canvas = document.createElement('canvas');
       canvas.width = image.naturalWidth;
       canvas.height = image.naturalHeight;
 
@@ -121,12 +190,10 @@ export class CompressionService {
 
       context.drawImage(image, 0, 0);
       const mimeType = format === 'png' ? 'image/png' : getMimeType(format);
-      const effectiveQuality = format === 'png' ? undefined : quality;
-
       canvas.toBlob((blob) => {
         canvas.remove();
         resolve(blob);
-      }, mimeType, effectiveQuality);
+      }, mimeType, format === 'png' ? undefined : quality);
     });
   }
 }
