@@ -113,7 +113,7 @@ export class ImageGalleryModal extends Modal {
 
     return [...files].sort((a, b) => {
       if (this.sort === 'size') return b.stat.size - a.stat.size;
-      if (this.sort === 'path') return a.parent.path.localeCompare(b.parent.path);
+      if (this.sort === 'path') return (a.parent?.path ?? '').localeCompare(b.parent?.path ?? '');
       return a.name.localeCompare(b.name);
     });
   }
@@ -135,7 +135,7 @@ export class ImageGalleryModal extends Modal {
 
     const body = card.createDiv({ cls: 'image-context-gallery-card-body' });
     body.createDiv({ cls: 'image-context-gallery-card-name', text: file.name });
-    body.createDiv({ cls: 'image-context-gallery-card-path', text: file.parent.path || '/' });
+    body.createDiv({ cls: 'image-context-gallery-card-path', text: file.parent?.path || '/' });
     body.createDiv({ cls: 'image-context-gallery-card-meta', text: `${getExtension(file.name).toUpperCase()} · ${formatBytes(file.stat.size)}` });
 
     const preview = body.createDiv({ cls: 'image-context-gallery-card-status', text: 'Analyzing…' });
