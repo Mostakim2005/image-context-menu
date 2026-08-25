@@ -18,6 +18,7 @@ import { createProgressOverlay } from './ui/progress-overlay';
 import { formatBytes, getExtension, hasExtension, isImageExtension, percentSaved, sanitizeBaseName } from './utils/image-utils';
 import { normalizeResizeValue, isValidResizeValue } from './utils/validation';
 import { normalizePath } from 'obsidian';
+import { ImageGalleryModal } from './ui/image-gallery-modal';
 
 export default class ImageContextPlugin extends Plugin {
   settings: ImageContextSettings = { ...DEFAULT_SETTINGS };
@@ -27,7 +28,14 @@ export default class ImageContextPlugin extends Plugin {
   private vaultImageService!: VaultImageService;
 
   async onload(): Promise<void> {
-    this.settings = await loadSettings(this);
+    try {
+      this.settings = await loadSettings(this);
+    } catch (error) {
+      console.error('Image context: settings could not be loaded', error);
+      this.settings = { ...DEFAULT_SETTINGS };
+      new Notice('Image context loaded with default settings.');
+    }
+
     this.compressionService = new CompressionService(this.app, () => this.settings);
     this.clipboardService = new ClipboardService();
     this.vaultImageService = new VaultImageService(this.app);
@@ -40,18 +48,68 @@ export default class ImageContextPlugin extends Plugin {
       checkCallback: (checking) => {
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!activeView?.file) return false;
-        if (!checking) void this.compressCurrentNoteImages(activeView);
+        if (!checking) void this.compressCurrentNoteImages(activeView).catch((error: unknown) => {
+          console.error('Image context: note compression failed', error);
+          new Notice('Could not compress note images.');
+        });
         return true;
       },
     });
 
-    this.addRibbonIcon('image-file', 'Compress images in current note', () => {
-      void this.compressCurrentNoteImages();
+    this.addCommand({
+      id: 'open-image-gallery',
+      name: 'Open image gallery',
+      callback: () => {
+        new ImageGalleryModal(this.app, this.compressionService, () => this.settings).open();
+      },
     });
 
-    this.registerDomEvent(document, 'contextmenu', (event) => {
-      this.handleContextMenu(event);
+    this.addRibbonIcon('images', 'Open image gallery', () => {
+      new ImageGalleryModal(this.app, this.compressionService, () => this.settings).open();
     });
+
+    // Keep context-menu interception narrow: identify our image first and only
+    // then consume the event. A separate pointer path handles mobile long press.
+    this.registerDomEvent(document, 'contextmenu', (event) => this.handleContextMenu(event));
+    this.registerDomEvent(document, 'pointerdown', (event) => this.handlePointerDown(event));
+    this.registerDomEvent(document, 'pointerup', () => this.cancelLongPress());
+    this.registerDomEvent(document, 'pointercancel', () => this.cancelLongPress());
+    this.registerDomEvent(document, 'pointermove', (event) => {
+      if (Math.abs(event.clientX - this.longPressStartX) > 12 || Math.abs(event.clientY - this.longPressStartY) > 12) {
+        this.cancelLongPress();
+      }
+    });
+  }
+
+  private longPressTimer: number | null = null;
+  private longPressStartX = 0;
+  private longPressStartY = 0;
+
+  private handlePointerDown(event: PointerEvent): void {
+    if (event.pointerType !== 'touch') return;
+    if (!(event.target instanceof Element)) return;
+    const image = event.target.closest('img');
+    if (!(image instanceof HTMLImageElement)) return;
+    if (image.closest('.menu, .modal, .image-context-progress, .image-context-action-modal')) return;
+
+    this.cancelLongPress();
+    this.longPressStartX = event.clientX;
+    this.longPressStartY = event.clientY;
+    this.longPressTimer = window.setTimeout(() => {
+      this.longPressTimer = null;
+      const target = this.vaultImageService.getTargetFromImage(image);
+      if (!target.isVaultImage) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.showImageMenu(target, image);
+    }, 550);
+  }
+
+  private cancelLongPress(): void {
+    if (this.longPressTimer !== null) {
+      window.clearTimeout(this.longPressTimer);
+      this.longPressTimer = null;
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -64,31 +122,31 @@ export default class ImageContextPlugin extends Plugin {
 
     const image = event.target.closest('img');
     if (!(image instanceof HTMLImageElement)) return;
-    if (image.closest('.menu, .modal, .image-context-progress')) return;
+    if (image.closest('.menu, .modal, .image-context-progress, .image-context-action-modal')) return;
 
     const target = this.vaultImageService.getTargetFromImage(image);
+    if (!target.isVaultImage && !/^https?:\/\//i.test(target.source)) return;
+
+    // Only now take ownership of the event.
+    event.preventDefault();
+    event.stopPropagation();
+    this.showImageMenu(target, image);
+  }
+
+  private showImageMenu(
+    target: ReturnType<VaultImageService['getTargetFromImage']>,
+    image: HTMLImageElement,
+  ): void {
     const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
     const editor = activeView?.editor;
 
-    event.preventDefault();
-    event.stopPropagation();
-
-    showImageContextMenu(event, target, {
-      copyAsJpeg: () => {
-        void this.copyAsJpeg(image);
-      },
-      copyEmbed: () => {
-        void this.copyEmbedLink(target);
-      },
-      copyExternalLink: () => {
-        void this.copyExternalLink(target.source);
-      },
+    showImageContextMenu(this.app, target, {
+      copyAsJpeg: () => { void this.copyAsJpeg(image); },
+      copyEmbed: () => { void this.copyEmbedLink(target); },
       share: () => {
         if (target.file) void this.shareImage(target.file);
       },
-      showInfo: () => {
-        void this.showImageInfo(image, target.file);
-      },
+      showInfo: () => { this.showImageInfo(image, target.file); },
       rename: () => {
         if (target.file) this.renameImage(target.file);
       },
@@ -97,12 +155,13 @@ export default class ImageContextPlugin extends Plugin {
       },
       resize: () => {
         if (target.file && editor) this.resizeImage(editor, image);
+        else new Notice('Resize is available from an Obsidian image embed in the editor.');
       },
       openImage: () => {
         if (target.file) {
           void this.app.workspace.openLinkText(target.file.path, '', true);
         } else if (target.source) {
-          window.open(target.source, '_blank', 'noopener');
+          window.open(target.source, '_blank', 'noopener,noreferrer');
         }
       },
     });
@@ -255,22 +314,13 @@ export default class ImageContextPlugin extends Plugin {
         return;
       }
 
-      const alt = target.source ? 'image' : 'image';
-      await this.clipboardService.writeText(`![${alt}](${target.source})`, 'Markdown image link copied.');
+      throw new Error('Only vault images have an Obsidian embed path.');
     } catch (error) {
       console.error('Copy embed link failed', error);
       new Notice('Could not copy the image link.');
     }
   }
 
-  private async copyExternalLink(source: string): Promise<void> {
-    try {
-      await this.clipboardService.writeText(source, 'External link copied.');
-    } catch (error) {
-      console.error('Copy external link failed', error);
-      new Notice('Could not copy the external link.');
-    }
-  }
 
   private async shareImage(file: TFile): Promise<void> {
     try {

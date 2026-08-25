@@ -2,11 +2,21 @@ import type { TFile } from 'obsidian';
 
 export type SupportedImageFormat = 'jpg' | 'jpeg' | 'png' | 'webp';
 
+export type CompressionDecision =
+  | 'compress'
+  | 'already-efficient'
+  | 'skipped'
+  | 'unsupported';
+
 export interface ImageContextSettings {
   sizeThresholdKB: number;
   jpegQuality: number;
   confirmDestructiveActions: boolean;
   showProgress: boolean;
+  minimumSavingsPercent: number;
+  skipAlreadyCompressed: boolean;
+  preserveDimensions: boolean;
+  galleryColumns: number;
 }
 
 export interface ImageTarget {
@@ -22,6 +32,17 @@ export interface ImageInfo {
   sizeBytes: number | null;
   fileName: string;
   extension: string | null;
+}
+
+export interface CompressionPreview {
+  decision: CompressionDecision;
+  originalBytes: number;
+  estimatedBytes: number | null;
+  estimatedSavingsPercent: number;
+  width: number | null;
+  height: number | null;
+  quality: number;
+  reason: string;
 }
 
 export interface CompressionResult {
