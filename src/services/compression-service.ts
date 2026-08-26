@@ -177,8 +177,7 @@ export class CompressionService {
 
   private imageToBlob(image: HTMLImageElement, format: SupportedImageFormat, quality: number): Promise<Blob | null> {
     return new Promise((resolve, reject) => {
-      // Canvas is a DOM primitive rather than an Obsidian container element.
-      // eslint-disable-next-line obsidianmd/prefer-create-el
+      // Canvas is a DOM primitive; it must be created as a real HTMLCanvasElement.
       const canvas = document.createElement('canvas');
       canvas.width = image.naturalWidth;
       canvas.height = image.naturalHeight;
