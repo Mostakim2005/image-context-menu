@@ -1,4 +1,4 @@
-import { TFile, type App } from 'obsidian';
+import {TFile, type App, createEl} from 'obsidian';
 import type {
   CompressionPreview,
   CompressionResult,
@@ -97,20 +97,7 @@ export class CompressionService {
       const arrayBuffer = await this.app.vault.readBinary(file);
       const blob = new Blob([arrayBuffer], { type: getMimeType(extension) });
       const image = await this.loadImage(blob);
-      const format: SupportedImageFormat | undefined =
-        extension === 'jpg' || extension === 'jpeg' || extension === 'png' || extension === 'webp'
-          ? extension
-          : undefined;
-      if (!format) {
-        return {
-          status: 'unsupported',
-          originalBytes,
-          outputBytes: originalBytes,
-          savedBytes: 0,
-          reason: 'Unsupported image format.',
-        };
-      }
-      const output = await this.imageToBlob(image, format, settings.jpegQuality / 100);
+      const output = await this.imageToBlob(image, extension, settings.jpegQuality / 100);
 
       if (!output) {
         return { status: 'error', originalBytes, outputBytes: originalBytes, savedBytes: 0, reason: 'The browser could not encode the image.' };
@@ -184,7 +171,7 @@ export class CompressionService {
 
   private imageToBlob(image: HTMLImageElement, format: SupportedImageFormat, quality: number): Promise<Blob | null> {
     return new Promise((resolve, reject) => {
-      const canvas = document.createElement('canvas');
+      const canvas = createEl('canvas');
       canvas.width = image.naturalWidth;
       canvas.height = image.naturalHeight;
 
