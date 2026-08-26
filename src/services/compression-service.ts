@@ -1,4 +1,4 @@
-import {TFile, type App, createEl} from 'obsidian';
+import { TFile, type App } from 'obsidian';
 import type {
   CompressionPreview,
   CompressionResult,
@@ -84,6 +84,9 @@ export class CompressionService {
     const originalBytes = file.stat.size;
     const settings = this.getSettings();
     const extension = getExtension(file.name);
+    const format: SupportedImageFormat | null = ['jpg', 'jpeg', 'png', 'webp'].includes(extension)
+      ? extension as SupportedImageFormat
+      : null;
 
     const preview = await this.previewFile(file);
     if (preview.decision === 'unsupported') {
@@ -97,7 +100,10 @@ export class CompressionService {
       const arrayBuffer = await this.app.vault.readBinary(file);
       const blob = new Blob([arrayBuffer], { type: getMimeType(extension) });
       const image = await this.loadImage(blob);
-      const output = await this.imageToBlob(image, extension, settings.jpegQuality / 100);
+      if (!format) {
+        return { status: 'unsupported', originalBytes, outputBytes: originalBytes, savedBytes: 0, reason: 'Unsupported image format.' };
+      }
+      const output = await this.imageToBlob(image, format, settings.jpegQuality / 100);
 
       if (!output) {
         return { status: 'error', originalBytes, outputBytes: originalBytes, savedBytes: 0, reason: 'The browser could not encode the image.' };
@@ -171,7 +177,9 @@ export class CompressionService {
 
   private imageToBlob(image: HTMLImageElement, format: SupportedImageFormat, quality: number): Promise<Blob | null> {
     return new Promise((resolve, reject) => {
-      const canvas = createEl('canvas');
+      // Canvas is a DOM primitive rather than an Obsidian container element.
+      // eslint-disable-next-line obsidianmd/prefer-create-el
+      const canvas = document.createElement('canvas');
       canvas.width = image.naturalWidth;
       canvas.height = image.naturalHeight;
 
@@ -190,7 +198,7 @@ export class CompressionService {
 
       context.drawImage(image, 0, 0);
       const mimeType = format === 'png' ? 'image/png' : getMimeType(format);
-      canvas.toBlob((blob) => {
+      canvas.toBlob((blob: Blob | null) => {
         canvas.remove();
         resolve(blob);
       }, mimeType, format === 'png' ? undefined : quality);
