@@ -40,17 +40,17 @@ class ImageActionModal extends Modal {
     const actions = this.contentEl.createDiv({ cls: 'image-context-action-grid' });
 
     if (this.target.isVaultImage) {
-      this.addAction(actions, 'Copy embed', 'Copy the exact Obsidian embed syntax.', this.actions.copyEmbed);
+      this.addAction(actions, 'Copy embed', 'Copy the exact Obsidian embed syntax.', () => this.actions.copyEmbed());
     }
-    this.addAction(actions, 'Copy as JPEG', 'Copy a JPEG version to the clipboard.', this.actions.copyAsJpeg);
-    this.addAction(actions, 'Image information', 'View dimensions, type, and size.', this.actions.showInfo);
-    this.addAction(actions, 'Open image', 'Open the image normally.', this.actions.openImage);
+    this.addAction(actions, 'Copy as JPEG', 'Copy a JPEG version to the clipboard.', () => this.actions.copyAsJpeg());
+    this.addAction(actions, 'Image information', 'View dimensions, type, and size.', () => this.actions.showInfo());
+    this.addAction(actions, 'Open image', 'Open the image normally.', () => this.actions.openImage());
 
     if (this.target.isVaultImage && this.target.file) {
-      this.addAction(actions, 'Share image', 'Share the original vault file.', this.actions.share);
-      this.addAction(actions, 'Resize image', 'Add an Obsidian embed size.', this.actions.resize);
-      this.addAction(actions, 'Compress image', 'Preview and safely reduce file size.', this.actions.compress);
-      this.addAction(actions, 'Rename image', 'Rename while letting Obsidian update links.', this.actions.rename);
+      this.addAction(actions, 'Share image', 'Share the original vault file.', () => this.actions.share());
+      this.addAction(actions, 'Resize image', 'Add an Obsidian embed size.', () => this.actions.resize());
+      this.addAction(actions, 'Compress image', 'Preview and safely reduce file size.', () => this.actions.compress());
+      this.addAction(actions, 'Rename image', 'Rename while letting Obsidian update links.', () => this.actions.rename());
     }
 
     const cancel = this.contentEl.createEl('button', { cls: 'image-context-action-cancel', text: 'Cancel' });
